@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>全国1741市区町村 暗記ゲーム</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7f4;color:#172019;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif}
+.wrap{max-width:1100px;margin:auto;padding:14px}.card{background:#fff;border-radius:18px;padding:16px;margin-bottom:12px;box-shadow:0 2px 14px #0001}
+h1{font-size:22px;margin:0 0 5px}.sub{color:#657067;font-size:13px}.layout{display:grid;gap:12px}
+.inputrow{display:flex;gap:8px}.inputrow input{flex:1;min-width:0;border:2px solid #d7ded8;border-radius:12px;padding:13px;font-size:17px}.inputrow button{border:0;border-radius:12px;background:#18743a;color:white;padding:0 18px;font-weight:700;font-size:16px}
+.msg{min-height:28px;padding-top:8px;font-weight:700}.ok{color:#16823c}.ng{color:#c33}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#f0f5f1;border-radius:12px;padding:10px;text-align:center}.num{font-size:22px;font-weight:800}.label{font-size:11px;color:#657067}
+.tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}select,button.secondary{border:1px solid #cbd3cd;border-radius:10px;background:#fff;padding:9px 12px;font-size:14px}
+.mapbox{background:#eef1ee;border-radius:16px;overflow:hidden;touch-action:none}.mapbox svg{width:100%;height:auto;display:block}.muni{fill:#fff;stroke:#aeb8b0;stroke-width:.45;vector-effect:non-scaling-stroke}.muni.done{fill:#39a852;stroke:#247b39}.muni:hover{fill:#d9eadc}
+.legend{display:flex;gap:14px;align-items:center;font-size:12px;color:#59635d;margin-top:8px}.dot{width:13px;height:13px;border-radius:3px;display:inline-block;border:1px solid #aeb8b0;background:#fff}.dot.g{background:#39a852;border-color:#247b39}
+.loading{text-align:center;padding:50px;color:#657067}
+@media(min-width:800px){.layout{grid-template-columns:320px 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card"><h1>🇯🇵 全国1741市区町村 暗記ゲーム</h1><div class="sub">自分で市区町村名を入力して、日本地図を少しずつ埋めよう。</div></div>
+<div class="layout">
+<div>
+<div class="card">
+<div class="inputrow"><input id="answer" autocomplete="off" placeholder="例：徳島市、札幌市、那覇市"><button id="submit">解答</button></div>
+<div id="msg" class="msg"></div>
+<div class="tools"><select id="pref"><option value="">都道府県で絞る</option></select><button class="secondary" id="reset">進捗をリセット</button></div>
+</div>
+<div class="card"><div class="stats">
+<div class="stat"><div class="num" id="count">0</div><div class="label">正解 / 1741</div></div>
+<div class="stat"><div class="num" id="percent">0.0%</div><div class="label">達成率</div></div>
+<div class="stat"><div class="num" id="remaining">1741</div><div class="label">残り</div></div>
+</div></div>
+<div class="card"><b>遊び方</b><p class="sub">思い出した市区町村を自由に入力してください。正解すると、その自治体が緑色になります。同名自治体は都道府県名を付けて入力できます。進捗はこの端末に自動保存されます。</p></div>
+</div>
+<div class="card"><div class="zoomtools"><button class="secondary" id="zoomIn">＋</button><button class="secondary" id="zoomOut">−</button><button class="secondary" id="zoomReset">全体表示</button></div><div id="map" class="mapbox"><div class="loading">日本地図を読み込んでいます…</div></div><div class="legend"><span><i class="dot"></i>未回答</span><span><i class="dot g"></i>正解</span><span id="status">読み込み中</span></div></div>
+</div></div>
+<script>
+const MAP_URL="https://raw.githubusercontent.com/K-Oxon/Japan-map-for-BI/main/data/administrative_area/municipality/ja_municipality_area.topojson";
+const GOV_URL="https://code4fukui.github.io/localgovjp/localgovjp.json";
+const KEY="japanMunicipalityMemory1741";
+let features=[],byName=new Map(),solved=new Set(),svg,path,g,zoom;
+const $=id=>document.getElementById(id);
+const norm=s=>String(s||"").replace(/[\s　]/g,"").replace(/ヶ/g,"ケ").trim();
+
+function loadSolved(){try{solved=new Set(JSON.parse(localStorage.getItem(KEY)||"[]").map(String))}catch(e){solved=new Set()}}
+function saveSolved(){localStorage.setItem(KEY,JSON.stringify([...solved]))}
+function updateStats(){let n=solved.size;$("count").textContent=n;$("percent").textContent=(n/1741*100).toFixed(1)+"%";$("remaining").textContent=Math.max(0,1741-n)}
+function show(t,c=""){$("msg").textContent=t;$("msg").className="msg "+c}
+
+async function main(){
+ loadSolved();
+ const [topo,gov]=await Promise.all([d3.json(MAP_URL),d3.json(GOV_URL)]);
+ const obj=Object.values(topo.objects)[0];
+ features=topojson.feature(topo,obj).features;
+ const govMap=new Map(gov.map(x=>[String(x.lgcode||"").replace(/\D/g,""),x]));
+ features.forEach(f=>{
+   const raw=String(f.id??f.properties?.lgcode??f.properties?.code??"");
+   const code=raw.replace(/\D/g,"");
+   const g=govMap.get(code);
+   if(g){
+     f.muni={name:g.city,pref:g.pref,code:code};
+     const n=norm(g.city), pn=norm(g.pref+g.city);
+     if(!byName.has(n))byName.set(n,[]);
+     byName.get(n).push(f.muni);
+     if(!byName.has(pn))byName.set(pn,[]);
+     byName.get(pn).push(f.muni);
+   }
+ });
+ const ps=[...new Set(features.map(f=>f.muni?.pref).filter(Boolean))].sort();
+ ps.forEach(p=>{let o=document.createElement("option");o.value=p;o.textContent=p;$("pref").appendChild(o)});
+ draw();updateStats();$("status").textContent=features.length+"市区町村";
+}
+function draw(){
+ const box=$("map");box.innerHTML="";
+ const w=900,h=900;
+ svg=d3.select(box).append("svg").attr("viewBox",`0 0 ${w} ${h}`);
+ const fc={type:"FeatureCollection",features};
+ const projection=d3.geoMercator().fitSize([w,h],fc);
+ path=d3.geoPath(projection);
+ g=svg.append("g");
+ g.selectAll("path").data(features).join("path")
+   .attr("class",f=>solved.has(f.muni?.code)?"muni done":"muni")
+   .attr("d",path)
+   .append("title").text(f=>f.muni?`${f.muni.pref} ${f.muni.name}`:"");
+ zoom=d3.zoom().scaleExtent([1,10]).on("zoom",e=>g.attr("transform",e.transform));
+ svg.call(zoom).on("dblclick.zoom",null);
+}
+function submit(){
+ const k=norm($("answer").value);
+ if(!k)return;
+ const hits=byName.get(k)||[];
+ if(!hits.length){show("見つかりません。正式名称で入力してみてください。","ng");return}
+ const hit=hits.find(x=>!solved.has(x.code))||hits[0];
+ if(solved.has(hit.code)){show(`${hit.pref} ${hit.name} はすでに正解済みです。`,"ng");return}
+ solved.add(hit.code);saveSolved();updateStats();
+ svg.selectAll("path").filter(f=>f.muni?.code===hit.code).classed("done",true);
+ show(`正解！ ${hit.pref} ${hit.name}`,"ok");$("answer").value="";$("answer").focus();
+ if(solved.size>=1741)show("🎉 1741市区町村コンプリート！","ok");
+}
+$("submit").onclick=submit;
+$("answer").addEventListener("keydown",e=>{if(e.key==="Enter")submit()});
+$("reset").onclick=()=>{if(confirm("これまでの正解をすべてリセットしますか？")){solved.clear();saveSolved();updateStats();draw();show("進捗をリセットしました。")}};
+$("zoomIn").onclick=()=>svg.transition().duration(180).call(zoom.scaleBy,1.7);
+$("zoomOut").onclick=()=>svg.transition().duration(180).call(zoom.scaleBy,0.59);
+$("zoomReset").onclick=()=>svg.transition().duration(180).call(zoom.transform,d3.zoomIdentity);
+$("pref").onchange=()=>{let p=$("pref").value;svg.selectAll("path").style("opacity",f=>!p||f.muni?.pref===p?1:.12)};
+main().catch(e=>{console.error(e);$("map").innerHTML='<div class="loading">地図の読み込みに失敗しました。ページを再読み込みしてください。</div>';show("読み込みエラー","ng")});
+</script>
+</body>
+</html>
